@@ -1,0 +1,28 @@
+modules = ["nodejs-20"]
+
+[nix]
+channel = "stable-24_05"
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Discord Bot Server"
+
+[[workflows.workflow]]
+name = "Discord Bot Server"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm install discord.js express sqlite3 sqlite && node index.js"
+waitForPort = 5000
+
+[deployment]
+run = ["sh", "-c", "npm install discord.js express sqlite3 sqlite && node index.js"]
