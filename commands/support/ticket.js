@@ -1,7 +1,6 @@
-const { SlashCommandBuilder, ChannelType, PermissionFlagsBits } = require('discord.js');
+const { SlashCommandBuilder, ChannelType, PermissionFlagsBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { createEmbed } = require('../../utils/embed');
 const { createTicket, getUserTickets, getGuildSettings } = require('../../database');
-const config = require('../../config');
 const logger = require('../../utils/logger');
 
 module.exports = {
@@ -23,15 +22,15 @@ module.exports = {
                 });
             }
 
-            // Check if bot has required permissions
+            // Check if bot has required permissions for threads
             if (!interaction.guild.members.me.permissions.has([
-                PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.ManageThreads,
+                PermissionFlagsBits.CreatePrivateThreads,
                 PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ManageRoles
+                PermissionFlagsBits.SendMessages
             ])) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need permissions to manage channels, view channels, send messages, and manage roles to create tickets.')],
+                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need permissions to manage threads, create private threads, view channels, and send messages to create tickets.')],
                     ephemeral: true
                 });
             }
@@ -51,153 +50,108 @@ module.exports = {
             const openTickets = existingTickets.filter(ticket => ticket.status === 'open');
             
             if (openTickets.length > 0) {
-                const ticketChannel = interaction.guild.channels.cache.get(openTickets[0].channel_id);
-                if (ticketChannel) {
+                const ticketThread = interaction.guild.channels.cache.get(openTickets[0].channel_id);
+                if (ticketThread) {
                     return await interaction.reply({
-                        embeds: [createEmbed('error', 'Ticket Already Exists', `You already have an open ticket: ${ticketChannel}`)],
+                        embeds: [createEmbed('error', 'Ticket Already Exists', `You already have an open ticket: ${ticketThread}`)],
                         ephemeral: true
                     });
                 }
             }
 
-            // Get guild settings for ticket category
-            const guildSettings = await getGuildSettings(interaction.guild.id);
-            let ticketCategory = null;
+            // Create private thread in current channel
+            const threadName = `ticket-${interaction.user.username}-${Date.now().toString().slice(-4)}`;
+            const thread = await interaction.channel.threads.create({
+                name: threadName,
+                type: 12, // GUILD_PRIVATE_THREAD
+                reason: `Support ticket created by ${interaction.user.tag}: ${reason}`
+            });
 
-            // Find or create ticket category
-            if (guildSettings?.ticket_category) {
-                ticketCategory = interaction.guild.channels.cache.get(guildSettings.ticket_category);
-            }
+            // Add user to thread
+            await thread.members.add(interaction.user.id);
+
+            // Get guild settings for support role
+            const guildSettings = await getGuildSettings(interaction.guild.id);
             
-            if (!ticketCategory) {
-                // Try to find by name
-                ticketCategory = interaction.guild.channels.cache.find(
-                    channel => channel.name.toLowerCase() === config.tickets.categoryName.toLowerCase() && 
-                              channel.type === ChannelType.GuildCategory
-                );
-                
-                // Create category if it doesn't exist
-                if (!ticketCategory) {
-                    try {
-                        ticketCategory = await interaction.guild.channels.create({
-                            name: config.tickets.categoryName,
-                            type: ChannelType.GuildCategory,
-                            permissionOverwrites: [
-                                {
-                                    id: interaction.guild.roles.everyone,
-                                    deny: [PermissionFlagsBits.ViewChannel]
-                                }
-                            ]
-                        });
-                    } catch (error) {
-                        logger.error('Failed to create ticket category:', error);
-                        return await interaction.reply({
-                            embeds: [createEmbed('error', 'Error', 'Failed to create ticket category. Please check my permissions.')],
-                            ephemeral: true
-                        });
+            // Add support role members to thread if configured
+            if (guildSettings?.ticket_support_role) {
+                const supportRole = interaction.guild.roles.cache.get(guildSettings.ticket_support_role);
+                if (supportRole) {
+                    // Add all online members with the support role to the thread
+                    const supportMembers = supportRole.members.filter(member => 
+                        member.presence?.status !== 'offline' && !member.user.bot
+                    );
+                    
+                    for (const [, member] of supportMembers) {
+                        try {
+                            await thread.members.add(member.id);
+                        } catch (error) {
+                            logger.warn(`Failed to add support member ${member.user.tag} to ticket thread`);
+                        }
                     }
                 }
             }
 
-            // Find support role
-            let supportRole = null;
-            if (guildSettings?.support_role) {
-                supportRole = interaction.guild.roles.cache.get(guildSettings.support_role);
-            }
-            
-            if (!supportRole) {
-                supportRole = interaction.guild.roles.cache.find(role => 
-                    role.name.toLowerCase() === config.tickets.supportRoleName.toLowerCase()
-                );
-            }
+            // Save ticket to database
+            await createTicket(interaction.guild.id, thread.id, interaction.user.id, reason);
 
-            // Create ticket channel
-            const ticketNumber = Date.now().toString().slice(-6);
-            const channelName = `ticket-${interaction.user.username}-${ticketNumber}`;
-            
-            const permissionOverwrites = [
-                {
-                    id: interaction.guild.roles.everyone,
-                    deny: [PermissionFlagsBits.ViewChannel]
-                },
-                {
-                    id: interaction.user.id,
-                    allow: [
-                        PermissionFlagsBits.ViewChannel,
-                        PermissionFlagsBits.SendMessages,
-                        PermissionFlagsBits.ReadMessageHistory,
-                        PermissionFlagsBits.AttachFiles
-                    ]
-                },
-                {
-                    id: interaction.client.user.id,
-                    allow: [
-                        PermissionFlagsBits.ViewChannel,
-                        PermissionFlagsBits.SendMessages,
-                        PermissionFlagsBits.ManageChannels,
-                        PermissionFlagsBits.ReadMessageHistory
-                    ]
-                }
-            ];
+            // Create welcome message in thread
+            const welcomeEmbed = new EmbedBuilder()
+                .setColor('#00FF00')
+                .setTitle('🎫 New Support Ticket')
+                .setDescription(
+                    `Hello ${interaction.user}! Thank you for creating a support ticket.\n\n` +
+                    `**Your Issue:** ${reason}\n\n` +
+                    `**Please provide additional details:**\n` +
+                    `• What problem are you experiencing?\n` +
+                    `• When did this issue start?\n` +
+                    `• Have you tried any solutions already?\n\n` +
+                    `Our support team has been notified and will assist you soon!`
+                )
+                .setFooter({ text: `Ticket ID: ${thread.id}` })
+                .setTimestamp();
 
-            if (supportRole) {
-                permissionOverwrites.push({
-                    id: supportRole.id,
-                    allow: [
-                        PermissionFlagsBits.ViewChannel,
-                        PermissionFlagsBits.SendMessages,
-                        PermissionFlagsBits.ReadMessageHistory,
-                        PermissionFlagsBits.AttachFiles
-                    ]
-                });
-            }
+            // Create close button
+            const closeButton = new ButtonBuilder()
+                .setCustomId('close_ticket')
+                .setLabel('🔒 Close Ticket')
+                .setStyle(ButtonStyle.Danger);
 
-            const ticketChannel = await interaction.guild.channels.create({
-                name: channelName,
-                type: ChannelType.GuildText,
-                parent: ticketCategory.id,
-                permissionOverwrites
+            const actionRow = new ActionRowBuilder().addComponents(closeButton);
+
+            await thread.send({ 
+                content: guildSettings?.ticket_support_role ? `<@&${guildSettings.ticket_support_role}>` : '',
+                embeds: [welcomeEmbed], 
+                components: [actionRow] 
             });
 
-            // Add ticket to database
-            await createTicket(interaction.guild.id, ticketChannel.id, interaction.user.id, reason);
-
-            // Create welcome message in ticket channel
-            const welcomeEmbed = createEmbed('info', 'Support Ticket Created', 
-                `Hello ${interaction.user}! Thank you for creating a support ticket.\n\n**Reason:** ${reason}\n\nOur support team will be with you shortly. Please describe your issue in detail and provide any relevant information.\n\nTo close this ticket, use the \`/close\` command.`);
-
-            await ticketChannel.send({ 
-                content: supportRole ? `${supportRole}` : null,
-                embeds: [welcomeEmbed] 
+            // Confirm ticket creation
+            await interaction.reply({
+                embeds: [createEmbed('success', 'Ticket Created', `Your support ticket has been created: ${thread}\n\nPlease head to the thread to discuss your issue with our support team.`)],
+                ephemeral: true
             });
 
-            // Reply to user
-            const successEmbed = createEmbed('success', 'Ticket Created', 
-                `Your support ticket has been created: ${ticketChannel}\n\nPlease head over to your ticket channel to continue.`);
-
-            await interaction.reply({ embeds: [successEmbed], ephemeral: true });
-
-            // Log to ticket log channel if configured
-            if (guildSettings?.ticket_log_channel) {
-                const logChannel = interaction.guild.channels.cache.get(guildSettings.ticket_log_channel);
-                if (logChannel) {
-                    const logEmbed = createEmbed('info', 'Ticket Created', 
-                        `**User:** ${interaction.user.tag} (${interaction.user.id})\n**Channel:** ${ticketChannel}\n**Reason:** ${reason}\n**Time:** <t:${Math.floor(Date.now() / 1000)}:F>`);
-                    await logChannel.send({ embeds: [logEmbed] });
-                }
-            }
-
-            logger.info(`${interaction.user.tag} created ticket ${ticketChannel.name} in ${interaction.guild.name}`);
+            logger.info(`${interaction.user.tag} created ticket thread ${thread.name} in ${interaction.guild.name} - Reason: ${reason}`);
 
         } catch (error) {
             logger.error('Error in ticket command:', error);
             
-            const errorEmbed = createEmbed('error', 'Error', 'An error occurred while creating your ticket. Please try again or contact an administrator.');
+            let errorMessage = 'An unexpected error occurred while creating the ticket.';
+            
+            if (error.code === 50013) {
+                errorMessage = 'I do not have permission to create threads in this channel. Please check my permissions.';
+            } else if (error.message.includes('Missing Permissions')) {
+                errorMessage = 'I am missing the required permissions to create private threads.';
+            } else if (error.message.includes('Database')) {
+                errorMessage = 'Database error occurred while saving the ticket. Please try again.';
+            }
+            
+            const errorEmbed = createEmbed('error', 'Ticket Creation Failed', errorMessage);
             
             if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             } else {
-                await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             }
         }
     }

@@ -143,13 +143,198 @@ async function sendFAQForSelectMenu(interaction, topic) {
 
 async function handleButton(interaction) {
     try {
-        // Handle any button interactions here
-        // For now, we don't have any button interactions, but this is where they would go
-        logger.info(`Button interaction: ${interaction.customId} by ${interaction.user.tag}`);
+        if (interaction.customId === 'create_ticket') {
+            await handleCreateTicket(interaction);
+        } else if (interaction.customId === 'close_ticket') {
+            await handleCloseTicket(interaction);
+        } else {
+            logger.info(`Unknown button interaction: ${interaction.customId} by ${interaction.user.tag}`);
+        }
     } catch (error) {
         logger.error('Error handling button interaction:', error);
         
         const errorEmbed = createEmbed('error', 'Error', 'An error occurred while processing your button click.');
+        
+        if (interaction.replied || interaction.deferred) {
+            await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
+        } else {
+            await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
+        }
+    }
+}
+
+async function handleCreateTicket(interaction) {
+    const { createTicket, getUserTickets } = require('../database');
+    const { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
+    
+    try {
+        // Check if user already has an open ticket
+        const existingTickets = await getUserTickets(interaction.guild.id, interaction.user.id);
+        const openTickets = existingTickets.filter(ticket => ticket.status === 'open');
+        
+        if (openTickets.length > 0) {
+            // Find the thread
+            const existingThread = interaction.guild.channels.cache.get(openTickets[0].channel_id);
+            if (existingThread) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Ticket Already Exists', `You already have an open ticket: ${existingThread}`)],
+                    ephemeral: true
+                });
+            }
+        }
+
+        // Create private thread
+        const threadName = `ticket-${interaction.user.username}-${Date.now().toString().slice(-4)}`;
+        const thread = await interaction.channel.threads.create({
+            name: threadName,
+            type: 12, // GUILD_PRIVATE_THREAD
+            reason: `Support ticket created by ${interaction.user.tag}`
+        });
+
+        // Add user to thread
+        await thread.members.add(interaction.user.id);
+
+        // Get guild settings for support role
+        const guildSettings = await require('../database').getGuildSettings(interaction.guild.id);
+        
+        // Add support role members to thread if configured
+        if (guildSettings?.ticket_support_role) {
+            const supportRole = interaction.guild.roles.cache.get(guildSettings.ticket_support_role);
+            if (supportRole) {
+                // Add all online members with the support role to the thread
+                const supportMembers = supportRole.members.filter(member => 
+                    member.presence?.status !== 'offline' && !member.user.bot
+                );
+                
+                for (const [, member] of supportMembers) {
+                    try {
+                        await thread.members.add(member.id);
+                    } catch (error) {
+                        logger.warn(`Failed to add support member ${member.user.tag} to ticket thread`);
+                    }
+                }
+            }
+        }
+
+        // Save ticket to database
+        await createTicket(interaction.guild.id, thread.id, interaction.user.id, 'Ticket created via button');
+
+        // Create welcome message in thread
+        const welcomeEmbed = new EmbedBuilder()
+            .setColor('#00FF00')
+            .setTitle('🎫 New Support Ticket')
+            .setDescription(
+                `Hello ${interaction.user}! Thank you for creating a support ticket.\n\n` +
+                `**Please describe your issue in detail:**\n` +
+                `• What problem are you experiencing?\n` +
+                `• When did this issue start?\n` +
+                `• Have you tried any solutions already?\n\n` +
+                `Our support team has been notified and will assist you soon!`
+            )
+            .setFooter({ text: `Ticket ID: ${thread.id}` })
+            .setTimestamp();
+
+        // Create close button
+        const closeButton = new ButtonBuilder()
+            .setCustomId('close_ticket')
+            .setLabel('🔒 Close Ticket')
+            .setStyle(ButtonStyle.Danger);
+
+        const actionRow = new ActionRowBuilder().addComponents(closeButton);
+
+        await thread.send({ 
+            content: guildSettings?.ticket_support_role ? `<@&${guildSettings.ticket_support_role}>` : '',
+            embeds: [welcomeEmbed], 
+            components: [actionRow] 
+        });
+
+        // Confirm ticket creation
+        await interaction.reply({
+            embeds: [createEmbed('success', 'Ticket Created', `Your support ticket has been created: ${thread}`)],
+            ephemeral: true
+        });
+
+        logger.info(`${interaction.user.tag} created ticket thread ${thread.name} in ${interaction.guild.name}`);
+
+    } catch (error) {
+        logger.error('Error creating ticket thread:', error);
+        
+        let errorMessage = 'Failed to create ticket. Please try again or contact an administrator.';
+        
+        if (error.code === 50013) {
+            errorMessage = 'I do not have permission to create threads in this channel.';
+        } else if (error.message.includes('Missing Permissions')) {
+            errorMessage = 'I am missing the required permissions to create private threads.';
+        }
+        
+        await interaction.reply({
+            embeds: [createEmbed('error', 'Ticket Creation Failed', errorMessage)],
+            ephemeral: true
+        });
+    }
+}
+
+async function handleCloseTicket(interaction) {
+    const { closeTicket, getTicket } = require('../database');
+    
+    try {
+        // Check if this is a ticket thread
+        const ticket = await getTicket(interaction.channel.id);
+        
+        if (!ticket) {
+            return await interaction.reply({
+                embeds: [createEmbed('error', 'Not a Ticket', 'This command can only be used in ticket threads.')],
+                ephemeral: true
+            });
+        }
+
+        if (ticket.status === 'closed') {
+            return await interaction.reply({
+                embeds: [createEmbed('error', 'Already Closed', 'This ticket is already closed.')],
+                ephemeral: true
+            });
+        }
+
+        // Check if user can close the ticket (ticket owner or staff)
+        const canClose = ticket.user_id === interaction.user.id || 
+                        interaction.member.permissions.has('ModerateMembers') ||
+                        interaction.member.permissions.has('ManageThreads');
+
+        if (!canClose) {
+            return await interaction.reply({
+                embeds: [createEmbed('error', 'Permission Denied', 'You can only close your own tickets or you need moderation permissions.')],
+                ephemeral: true
+            });
+        }
+
+        // Close ticket in database
+        await closeTicket(interaction.channel.id, interaction.user.id, 'Ticket closed via button');
+
+        // Send closing message
+        const closeEmbed = createEmbed('warning', 'Ticket Closed', 
+            `This ticket has been closed by ${interaction.user}.\n\n` +
+            `**Closed at:** <t:${Math.floor(Date.now() / 1000)}:F>\n` +
+            `This thread will be archived automatically.`
+        );
+
+        await interaction.reply({ embeds: [closeEmbed] });
+
+        // Archive and lock the thread
+        setTimeout(async () => {
+            try {
+                await interaction.channel.setArchived(true);
+                await interaction.channel.setLocked(true);
+            } catch (error) {
+                logger.warn(`Failed to archive ticket thread ${interaction.channel.name}:`, error);
+            }
+        }, 5000); // 5 second delay
+
+        logger.info(`${interaction.user.tag} closed ticket ${interaction.channel.name} in ${interaction.guild.name}`);
+
+    } catch (error) {
+        logger.error('Error closing ticket:', error);
+        
+        const errorEmbed = createEmbed('error', 'Close Failed', 'Failed to close the ticket. Please try again.');
         
         if (interaction.replied || interaction.deferred) {
             await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
