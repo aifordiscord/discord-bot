@@ -1,6 +1,6 @@
 module.exports = {
     // Bot credentials
-    token: process.env.DISCORD_TOKEN || 'your_bot_token_here',
+    token: process.env.DISCORD_TOKEN || 'your_bot_token_here ',
     clientId: process.env.CLIENT_ID || 'your_client_id_here',
     
     // Server settings
@@ -13,7 +13,7 @@ module.exports = {
     
     // Bot settings
     prefix: process.env.PREFIX || '!',
-    ownerIds: process.env.OWNER_IDS ? process.env.OWNER_IDS.split(',') : ['your_user_id_here'],
+    ownerIds: process.env.OWNER_IDS ? process.env.OWNER_IDS.split(',') : ['your_discord_userid'],
     
     // Feature settings
     tickets: {
