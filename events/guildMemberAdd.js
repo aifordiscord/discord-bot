@@ -1,5 +1,7 @@
 const { getGuildSettings, getAutoRoles } = require('../database');
 const { createEmbed } = require('../utils/embed');
+const welcomeImage = require('../utils/welcomeImage');
+const { AttachmentBuilder } = require('discord.js');
 const logger = require('../utils/logger');
 
 module.exports = {
@@ -34,15 +36,44 @@ async function handleWelcomeMessage(member, guildSettings) {
             return;
         }
 
-        // Check if bot has permissions to send messages
+        // Check if bot has permissions to send messages and attach files
         const permissions = welcomeChannel.permissionsFor(member.guild.members.me);
-        if (!permissions.has(['ViewChannel', 'SendMessages'])) {
+        if (!permissions.has(['ViewChannel', 'SendMessages', 'AttachFiles'])) {
             logger.warn(`No permission to send welcome message in ${member.guild.name}`);
             return;
         }
 
-        // Replace {user} placeholder with actual user mention
-        const welcomeMessage = guildSettings.welcome_message.replace('{user}', member.user);
+        // Generate welcome image if enabled
+        if (guildSettings.welcome_image_enabled !== false) {
+            try {
+                const imageBuffer = await welcomeImage.generateWelcomeImage(member, guildSettings);
+                const attachment = new AttachmentBuilder(imageBuffer, { name: 'welcome.png' });
+
+                // Create simple embed to go with the image
+                const welcomeEmbed = createEmbed('primary', null, 
+                    guildSettings.welcome_message ? 
+                    guildSettings.welcome_message.replace('{user}', `<@${member.id}>`) : 
+                    `Welcome to **${member.guild.name}**, <@${member.id}>! 🎉`
+                );
+                welcomeEmbed.setImage('attachment://welcome.png');
+                welcomeEmbed.setFooter({ 
+                    text: `Member #${member.guild.memberCount}`, 
+                    iconURL: member.guild.iconURL({ dynamic: true }) 
+                });
+
+                await welcomeChannel.send({ embeds: [welcomeEmbed], files: [attachment] });
+                
+                logger.info(`Sent welcome image for ${member.user.tag} in ${member.guild.name}`);
+                return;
+            } catch (imageError) {
+                logger.warn(`Failed to generate welcome image for ${member.user.tag}, using fallback:`, imageError);
+            }
+        }
+
+        // Fallback to text-only welcome
+        const welcomeMessage = guildSettings.welcome_message ? 
+            guildSettings.welcome_message.replace('{user}', `<@${member.id}>`) : 
+            `Welcome to **${member.guild.name}**, <@${member.id}>! 🎉`;
 
         const welcomeEmbed = createEmbed('success', '👋 Welcome!', welcomeMessage);
         welcomeEmbed.setThumbnail(member.user.displayAvatarURL({ dynamic: true }));

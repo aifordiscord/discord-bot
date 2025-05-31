@@ -1,6 +1,7 @@
-const { SlashCommandBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
+const { SlashCommandBuilder, PermissionFlagsBits, ChannelType, AttachmentBuilder } = require('discord.js');
 const { createEmbed } = require('../../utils/embed');
 const { getGuildSettings, updateGuildSettings } = require('../../database');
+const welcomeImage = require('../../utils/welcomeImage');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 
@@ -14,6 +15,8 @@ module.exports = {
                 .setRequired(true)
                 .addChoices(
                     { name: 'Set Channel & Message', value: 'set' },
+                    { name: 'Set Background Image', value: 'background' },
+                    { name: 'Toggle Image Mode', value: 'toggle_image' },
                     { name: 'Disable Welcome', value: 'disable' },
                     { name: 'Test Welcome', value: 'test' },
                     { name: 'View Current Settings', value: 'view' }
@@ -27,6 +30,10 @@ module.exports = {
             option.setName('message')
                 .setDescription('Welcome message template (use {user} for mention)')
                 .setRequired(false))
+        .addStringOption(option =>
+            option.setName('background_url')
+                .setDescription('Background image URL for welcome cards (must be direct image link)')
+                .setRequired(false))
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
     async execute(interaction) {
@@ -38,6 +45,12 @@ module.exports = {
             switch (action) {
                 case 'set':
                     await handleSetWelcome(interaction, channel, message);
+                    break;
+                case 'background':
+                    await handleSetBackground(interaction);
+                    break;
+                case 'toggle_image':
+                    await handleToggleImage(interaction);
                     break;
                 case 'disable':
                     await handleDisableWelcome(interaction);
@@ -138,6 +151,75 @@ async function handleDisableWelcome(interaction) {
     logger.info(`${interaction.user.tag} disabled welcome system in ${interaction.guild.name}`);
 }
 
+async function handleSetBackground(interaction) {
+    const backgroundUrl = interaction.options.getString('background_url');
+    
+    if (!backgroundUrl) {
+        return await interaction.reply({
+            embeds: [createEmbed('error', 'Missing URL', 'Please provide a background image URL.')],
+            ephemeral: true
+        });
+    }
+
+    // Validate URL format
+    try {
+        new URL(backgroundUrl);
+    } catch {
+        return await interaction.reply({
+            embeds: [createEmbed('error', 'Invalid URL', 'Please provide a valid image URL.')],
+            ephemeral: true
+        });
+    }
+
+    try {
+        const currentSettings = await getGuildSettings(interaction.guild.id) || {};
+        await updateGuildSettings(interaction.guild.id, {
+            ...currentSettings,
+            background_url: backgroundUrl
+        });
+
+        const successEmbed = createEmbed('success', 'Background Updated', 
+            `Welcome card background has been set to the provided image.\n\n**URL:** ${backgroundUrl}\n\nUse \`/welcome test\` to see how it looks!`);
+
+        await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+
+        logger.info(`${interaction.user.tag} set welcome background in ${interaction.guild.name}`);
+    } catch (error) {
+        logger.error('Error setting welcome background:', error);
+        
+        const errorEmbed = createEmbed('error', 'Error', 'Failed to update welcome background. Please try again.');
+        await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+    }
+}
+
+async function handleToggleImage(interaction) {
+    try {
+        const currentSettings = await getGuildSettings(interaction.guild.id) || {};
+        const currentState = currentSettings.welcome_image_enabled !== false;
+        const newState = !currentState;
+
+        await updateGuildSettings(interaction.guild.id, {
+            ...currentSettings,
+            welcome_image_enabled: newState
+        });
+
+        const statusText = newState ? 'enabled' : 'disabled';
+        const successEmbed = createEmbed('success', 'Image Mode Updated', 
+            `Welcome image generation has been **${statusText}**.\n\n${newState ? 
+                'New members will receive welcome cards with images.' : 
+                'New members will receive text-only welcome messages.'}`);
+
+        await interaction.reply({ embeds: [successEmbed], ephemeral: true });
+
+        logger.info(`${interaction.user.tag} ${statusText} welcome images in ${interaction.guild.name}`);
+    } catch (error) {
+        logger.error('Error toggling welcome image:', error);
+        
+        const errorEmbed = createEmbed('error', 'Error', 'Failed to toggle image mode. Please try again.');
+        await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+    }
+}
+
 async function handleTestWelcome(interaction) {
     const guildSettings = await getGuildSettings(interaction.guild.id);
 
@@ -165,13 +247,40 @@ async function handleTestWelcome(interaction) {
         });
     }
 
-    // Send test welcome message
-    const testMessage = guildSettings.welcome_message.replace('{user}', interaction.user);
-    const testEmbed = createEmbed('info', '🧪 Test Welcome Message', testMessage);
-    testEmbed.setFooter({ text: 'This is a test message triggered by ' + interaction.user.tag });
-
     try {
-        await welcomeChannel.send({ embeds: [testEmbed] });
+        // Test with image if enabled
+        if (guildSettings.welcome_image_enabled !== false) {
+            try {
+                const imageBuffer = await welcomeImage.generateWelcomeImage(interaction.member, guildSettings);
+                const attachment = new AttachmentBuilder(imageBuffer, { name: 'test-welcome.png' });
+
+                const testEmbed = createEmbed('info', '🧪 Test Welcome Image', 
+                    guildSettings.welcome_message ? 
+                    guildSettings.welcome_message.replace('{user}', `<@${interaction.user.id}>`) : 
+                    `Welcome to **${interaction.guild.name}**, <@${interaction.user.id}>! 🎉`
+                );
+                testEmbed.setImage('attachment://test-welcome.png');
+                testEmbed.setFooter({ text: 'This is a test message triggered by ' + interaction.user.tag });
+
+                await welcomeChannel.send({ embeds: [testEmbed], files: [attachment] });
+            } catch (imageError) {
+                logger.warn('Failed to generate test welcome image, using fallback:', imageError);
+                
+                // Fallback to text-only
+                const testMessage = guildSettings.welcome_message.replace('{user}', `<@${interaction.user.id}>`);
+                const testEmbed = createEmbed('info', '🧪 Test Welcome Message', testMessage);
+                testEmbed.setFooter({ text: 'This is a test message triggered by ' + interaction.user.tag });
+                
+                await welcomeChannel.send({ embeds: [testEmbed] });
+            }
+        } else {
+            // Text-only welcome
+            const testMessage = guildSettings.welcome_message.replace('{user}', `<@${interaction.user.id}>`);
+            const testEmbed = createEmbed('info', '🧪 Test Welcome Message', testMessage);
+            testEmbed.setFooter({ text: 'This is a test message triggered by ' + interaction.user.tag });
+            
+            await welcomeChannel.send({ embeds: [testEmbed] });
+        }
 
         const successEmbed = createEmbed('success', 'Test Sent', 
             `Test welcome message has been sent to ${welcomeChannel}!\n\nCheck the channel to see how it looks.`);
