@@ -23,14 +23,46 @@ module.exports = {
 
     async execute(interaction) {
         try {
+            // Check if command is used in a guild
+            if (!interaction.guild) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Server Only', 'This command can only be used in a server.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if user has required permissions
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Missing Permissions', 'You need the "Moderate Members" permission to use this command.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if bot has required permissions
+            if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need the "Moderate Members" permission to execute this command.')],
+                    ephemeral: true
+                });
+            }
+
             const targetUser = interaction.options.getUser('user');
             const durationString = interaction.options.getString('duration');
             const reason = interaction.options.getString('reason') || 'No reason provided';
 
+            // Validate user parameter
+            if (!targetUser) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Invalid User', 'Please provide a valid user to mute.')],
+                    ephemeral: true
+                });
+            }
+
             // Check if user is trying to mute themselves
             if (targetUser.id === interaction.user.id) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'You cannot mute yourself!')],
+                    embeds: [createEmbed('error', 'Invalid Target', 'You cannot mute yourself.')],
                     ephemeral: true
                 });
             }
@@ -38,7 +70,7 @@ module.exports = {
             // Check if user is trying to mute the bot
             if (targetUser.id === interaction.client.user.id) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'I cannot mute myself!')],
+                    embeds: [createEmbed('error', 'Invalid Target', 'I cannot mute myself.')],
                     ephemeral: true
                 });
             }
@@ -150,12 +182,26 @@ module.exports = {
         } catch (error) {
             logger.error('Error in mute command:', error);
             
-            const errorEmbed = createEmbed('error', 'Error', 'An error occurred while trying to mute the user. Please check my permissions and try again.');
+            let errorMessage = 'An unexpected error occurred while trying to mute the user.';
+            
+            if (error.code === 50013) {
+                errorMessage = 'I do not have permission to mute this user. Please check my role hierarchy and permissions.';
+            } else if (error.message.includes('Missing Permissions')) {
+                errorMessage = 'I am missing the required permissions to moderate members.';
+            } else if (error.message.includes('Unknown User')) {
+                errorMessage = 'The specified user could not be found.';
+            } else if (error.message.includes('Cannot timeout')) {
+                errorMessage = 'This user cannot be muted. They may have higher permissions than me.';
+            } else if (error.message.includes('Invalid duration')) {
+                errorMessage = 'Invalid mute duration. Please use a valid time format (e.g., 1h, 30m, 1d).';
+            }
+            
+            const errorEmbed = createEmbed('error', 'Mute Failed', errorMessage);
             
             if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             } else {
-                await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             }
         }
     }

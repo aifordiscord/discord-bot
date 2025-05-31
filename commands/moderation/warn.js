@@ -20,13 +20,45 @@ module.exports = {
 
     async execute(interaction) {
         try {
+            // Check if command is used in a guild
+            if (!interaction.guild) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Server Only', 'This command can only be used in a server.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if user has required permissions
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Missing Permissions', 'You need the "Moderate Members" permission to use this command.')],
+                    ephemeral: true
+                });
+            }
+
             const targetUser = interaction.options.getUser('user');
             const reason = interaction.options.getString('reason');
+
+            // Validate user parameter
+            if (!targetUser) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Invalid User', 'Please provide a valid user to warn.')],
+                    ephemeral: true
+                });
+            }
+
+            // Validate reason parameter
+            if (!reason) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Missing Reason', 'Please provide a reason for the warning.')],
+                    ephemeral: true
+                });
+            }
 
             // Check if user is trying to warn themselves
             if (targetUser.id === interaction.user.id) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'You cannot warn yourself!')],
+                    embeds: [createEmbed('error', 'Invalid Target', 'You cannot warn yourself.')],
                     ephemeral: true
                 });
             }
@@ -34,7 +66,7 @@ module.exports = {
             // Check if user is trying to warn the bot
             if (targetUser.id === interaction.client.user.id) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'I cannot warn myself!')],
+                    embeds: [createEmbed('error', 'Invalid Target', 'I cannot warn myself.')],
                     ephemeral: true
                 });
             }
@@ -137,12 +169,22 @@ module.exports = {
         } catch (error) {
             logger.error('Error in warn command:', error);
             
-            const errorEmbed = createEmbed('error', 'Error', 'An error occurred while trying to warn the user. Please try again.');
+            let errorMessage = 'An unexpected error occurred while trying to warn the user.';
+            
+            if (error.message.includes('Database')) {
+                errorMessage = 'Database error occurred while saving the warning. Please try again.';
+            } else if (error.message.includes('Unknown User')) {
+                errorMessage = 'The specified user could not be found.';
+            } else if (error.message.includes('Cannot send')) {
+                errorMessage = 'Warning issued but could not send notification to user.';
+            }
+            
+            const errorEmbed = createEmbed('error', 'Warning Failed', errorMessage);
             
             if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             } else {
-                await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             }
         }
     }

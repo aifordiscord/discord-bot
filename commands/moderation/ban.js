@@ -25,14 +25,46 @@ module.exports = {
 
     async execute(interaction) {
         try {
+            // Check if command is used in a guild
+            if (!interaction.guild) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Server Only', 'This command can only be used in a server.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if user has required permissions
+            if (!interaction.member.permissions.has(PermissionFlagsBits.BanMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Missing Permissions', 'You need the "Ban Members" permission to use this command.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if bot has required permissions
+            if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.BanMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need the "Ban Members" permission to execute this command.')],
+                    ephemeral: true
+                });
+            }
+
             const targetUser = interaction.options.getUser('user');
             const reason = interaction.options.getString('reason') || 'No reason provided';
             const deleteDays = interaction.options.getInteger('delete_days') || 0;
 
+            // Validate user parameter
+            if (!targetUser) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Invalid User', 'Please provide a valid user to ban.')],
+                    ephemeral: true
+                });
+            }
+
             // Check if user is trying to ban themselves
             if (targetUser.id === interaction.user.id) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'You cannot ban yourself!')],
+                    embeds: [createEmbed('error', 'Invalid Target', 'You cannot ban yourself.')],
                     ephemeral: true
                 });
             }
@@ -40,7 +72,7 @@ module.exports = {
             // Check if user is trying to ban the bot
             if (targetUser.id === interaction.client.user.id) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'I cannot ban myself!')],
+                    embeds: [createEmbed('error', 'Invalid Target', 'I cannot ban myself.')],
                     ephemeral: true
                 });
             }
@@ -112,12 +144,24 @@ module.exports = {
         } catch (error) {
             logger.error('Error in ban command:', error);
             
-            const errorEmbed = createEmbed('error', 'Error', 'An error occurred while trying to ban the user. Please check my permissions and try again.');
+            let errorMessage = 'An unexpected error occurred while trying to ban the user.';
+            
+            if (error.code === 50013) {
+                errorMessage = 'I do not have permission to ban this user. Please check my role hierarchy and permissions.';
+            } else if (error.message.includes('Missing Permissions')) {
+                errorMessage = 'I am missing the required permissions to ban users.';
+            } else if (error.message.includes('Unknown User')) {
+                errorMessage = 'The specified user could not be found.';
+            } else if (error.message.includes('Cannot ban')) {
+                errorMessage = 'This user cannot be banned. They may have higher permissions than me.';
+            }
+            
+            const errorEmbed = createEmbed('error', 'Ban Failed', errorMessage);
             
             if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             } else {
-                await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             }
         }
     }
