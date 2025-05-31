@@ -9,7 +9,7 @@ module.exports = {
         logger.info(`Serving ${client.users.cache.size} users`);
 
         // Set bot activity
-        client.user.setActivity('for support tickets', { type: 'WATCHING' });
+        client.user.setActivity('for support tickets', { type: 3 }); // 3 = WATCHING
 
         // Log guild information
         client.guilds.cache.forEach(guild => {

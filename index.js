@@ -24,13 +24,25 @@ client.cooldowns = new Collection();
 
 // Express server for health checks
 const app = express();
-const PORT = process.env.PORT || 8000;
+const PORT = 5000;
 
 app.get('/health', (req, res) => {
     res.json({ 
         status: 'ok', 
         uptime: process.uptime(),
         botStatus: client.isReady() ? 'connected' : 'disconnected'
+    });
+});
+
+app.get('/', (req, res) => {
+    res.json({
+        name: 'Discord Support Bot',
+        status: client.isReady() ? 'online' : 'offline',
+        guilds: client.guilds.cache.size,
+        users: client.users.cache.size,
+        commands: client.commands.size,
+        uptime: Math.floor(process.uptime()),
+        version: '1.0.0'
     });
 });
 

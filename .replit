@@ -28,5 +28,9 @@ waitForPort = 5000
 run = ["sh", "-c", "npm install discord.js express sqlite3 sqlite && node index.js"]
 
 [[ports]]
+localPort = 5000
+externalPort = 5000
+
+[[ports]]
 localPort = 8000
 externalPort = 80

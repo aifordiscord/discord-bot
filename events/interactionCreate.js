@@ -27,7 +27,11 @@ async function handleSlashCommand(interaction) {
     const command = interaction.client.commands.get(interaction.commandName);
 
     if (!command) {
-        logger.warn(`No command matching ${interaction.commandName} was found.`);
+        logger.error(`No command matching ${interaction.commandName} was found.`);
+        await interaction.reply({
+            content: 'This command is not available or has been removed.',
+            ephemeral: true
+        }).catch(console.error);
         return;
     }
 
