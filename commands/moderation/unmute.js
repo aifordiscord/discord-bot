@@ -19,15 +19,47 @@ module.exports = {
 
     async execute(interaction) {
         try {
+            // Check if command is used in a guild
+            if (!interaction.guild) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Server Only', 'This command can only be used in a server.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if user has required permissions
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Missing Permissions', 'You need the "Moderate Members" permission to use this command.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if bot has required permissions
+            if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.ModerateMembers)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need the "Moderate Members" permission to execute this command.')],
+                    ephemeral: true
+                });
+            }
+
             const targetUser = interaction.options.getUser('user');
             const reason = interaction.options.getString('reason') || 'No reason provided';
+
+            // Validate user parameter
+            if (!targetUser) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Invalid User', 'Please provide a valid user to unmute.')],
+                    ephemeral: true
+                });
+            }
 
             // Get target member
             const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
 
             if (!targetMember) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'This user is not in the server.')],
+                    embeds: [createEmbed('error', 'User Not Found', 'This user is not in the server.')],
                     ephemeral: true
                 });
             }
@@ -35,7 +67,7 @@ module.exports = {
             // Check if target is mutable
             if (!targetMember.moderatable) {
                 return await interaction.reply({
-                    embeds: [createEmbed('error', 'Error', 'I cannot unmute this user. They may have higher permissions than me.')],
+                    embeds: [createEmbed('error', 'Permission Error', 'I cannot unmute this user. They may have higher permissions than me.')],
                     ephemeral: true
                 });
             }

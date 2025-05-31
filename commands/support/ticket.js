@@ -15,7 +15,36 @@ module.exports = {
 
     async execute(interaction) {
         try {
+            // Check if command is used in a guild
+            if (!interaction.guild) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Server Only', 'This command can only be used in a server.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if bot has required permissions
+            if (!interaction.guild.members.me.permissions.has([
+                PermissionFlagsBits.ManageChannels,
+                PermissionFlagsBits.ViewChannel,
+                PermissionFlagsBits.SendMessages,
+                PermissionFlagsBits.ManageRoles
+            ])) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need permissions to manage channels, view channels, send messages, and manage roles to create tickets.')],
+                    ephemeral: true
+                });
+            }
+
             const reason = interaction.options.getString('reason') || 'No reason provided';
+
+            // Validate reason length
+            if (reason.length > 200) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Reason Too Long', 'Please keep the reason under 200 characters.')],
+                    ephemeral: true
+                });
+            }
             
             // Check if user already has an open ticket
             const existingTickets = await getUserTickets(interaction.guild.id, interaction.user.id);

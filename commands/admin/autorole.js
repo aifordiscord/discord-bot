@@ -24,6 +24,30 @@ module.exports = {
 
     async execute(interaction) {
         try {
+            // Check if command is used in a guild
+            if (!interaction.guild) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Server Only', 'This command can only be used in a server.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if user has required permissions
+            if (!interaction.member.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Missing Permissions', 'You need the "Manage Roles" permission to use this command.')],
+                    ephemeral: true
+                });
+            }
+
+            // Check if bot has required permissions
+            if (!interaction.guild.members.me.permissions.has(PermissionFlagsBits.ManageRoles)) {
+                return await interaction.reply({
+                    embeds: [createEmbed('error', 'Bot Missing Permissions', 'I need the "Manage Roles" permission to execute this command.')],
+                    ephemeral: true
+                });
+            }
+
             const action = interaction.options.getString('action');
             const role = interaction.options.getRole('role');
 
@@ -39,19 +63,29 @@ module.exports = {
                     break;
                 default:
                     await interaction.reply({
-                        embeds: [createEmbed('error', 'Error', 'Invalid action specified.')],
+                        embeds: [createEmbed('error', 'Invalid Action', 'Please select a valid action (add, remove, or list).')],
                         ephemeral: true
                     });
             }
         } catch (error) {
             logger.error('Error in autorole command:', error);
             
-            const errorEmbed = createEmbed('error', 'Error', 'An error occurred while processing the autorole command. Please try again.');
+            let errorMessage = 'An unexpected error occurred while managing auto-roles.';
+            
+            if (error.code === 50013) {
+                errorMessage = 'I do not have permission to manage roles. Please check my role hierarchy and permissions.';
+            } else if (error.message.includes('Missing Permissions')) {
+                errorMessage = 'I am missing the required permissions to manage roles.';
+            } else if (error.message.includes('Database')) {
+                errorMessage = 'Database error occurred while saving auto-role settings. Please try again.';
+            }
+            
+            const errorEmbed = createEmbed('error', 'Auto-Role Failed', errorMessage);
             
             if (interaction.replied || interaction.deferred) {
-                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.followUp({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             } else {
-                await interaction.reply({ embeds: [errorEmbed], ephemeral: true });
+                await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
             }
         }
     }
