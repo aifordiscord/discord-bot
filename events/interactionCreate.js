@@ -70,15 +70,14 @@ async function handleSlashCommand(interaction) {
 
 async function handleSelectMenu(interaction) {
     try {
-        if (interaction.customId === 'help_category_select') {
+        if (interaction.customId === 'help_category_dynamic') {
+            const selection = interaction.values[0];
+            await handleDynamicHelpSelection(interaction, selection);
+        } else if (interaction.customId === 'help_category_select') {
             const category = interaction.values[0];
-            
-            // Handle category help directly
             await sendCategoryHelpForSelectMenu(interaction, category);
         } else if (interaction.customId === 'faq_select') {
             const topic = interaction.values[0];
-            
-            // Handle FAQ selection directly
             await sendFAQForSelectMenu(interaction, topic);
         }
     } catch (error) {
@@ -368,4 +367,259 @@ function checkRateLimit(interaction) {
     // Add current command to cooldowns
     userCooldowns.push(now);
     return true;
+}
+
+async function handleDynamicHelpSelection(interaction, selection) {
+    const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+    
+    const commands = interaction.client.commands;
+    
+    if (selection === 'back_to_main') {
+        // Return to main help menu
+        await sendMainHelpForUpdate(interaction);
+        return;
+    }
+    
+    if (selection === 'overview') {
+        // Show all commands overview
+        const categories = {};
+        
+        commands.forEach(command => {
+            let category = 'utility';
+            const commandName = command.data.name;
+            const fs = require('fs');
+            const path = require('path');
+            
+            const categoriesPath = path.join(__dirname, '..', '..');
+            const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
+            
+            for (const folder of categoryFolders) {
+                const folderPath = path.join(categoriesPath, 'commands', folder);
+                if (fs.existsSync(folderPath)) {
+                    const files = fs.readdirSync(folderPath);
+                    if (files.some(file => file === `${commandName}.js`)) {
+                        category = folder;
+                        break;
+                    }
+                }
+            }
+            
+            if (!categories[category]) {
+                categories[category] = [];
+            }
+            categories[category].push(command);
+        });
+
+        const embed = new EmbedBuilder()
+            .setColor('#5865F2')
+            .setTitle('📋 All Commands Overview')
+            .setDescription('Here are all available commands organized by category:')
+            .setTimestamp();
+
+        Object.entries(categories).forEach(([categoryName, commandList]) => {
+            const categoryIcon = getCategoryIcon(categoryName);
+            const commandNames = commandList.map(cmd => `\`/${cmd.data.name}\``).join(', ');
+            
+            embed.addFields({
+                name: `${categoryIcon} ${categoryName.charAt(0).toUpperCase() + categoryName.slice(1)} (${commandList.length})`,
+                value: commandNames || 'No commands',
+                inline: false
+            });
+        });
+
+        await interaction.update({ embeds: [embed], components: [] });
+        
+    } else {
+        // Show specific category
+        const categoryCommands = [];
+        
+        commands.forEach(command => {
+            let category = 'utility';
+            const commandName = command.data.name;
+            const fs = require('fs');
+            const path = require('path');
+            
+            const categoriesPath = path.join(__dirname, '..', '..');
+            const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
+            
+            for (const folder of categoryFolders) {
+                const folderPath = path.join(categoriesPath, 'commands', folder);
+                if (fs.existsSync(folderPath)) {
+                    const files = fs.readdirSync(folderPath);
+                    if (files.some(file => file === `${commandName}.js`)) {
+                        category = folder;
+                        break;
+                    }
+                }
+            }
+            
+            if (category === selection) {
+                categoryCommands.push(command);
+            }
+        });
+
+        const categoryIcon = getCategoryIcon(selection);
+        const embed = new EmbedBuilder()
+            .setColor('#5865F2')
+            .setTitle(`${categoryIcon} ${selection.charAt(0).toUpperCase() + selection.slice(1)} Commands`)
+            .setDescription(`Detailed information about ${selection} commands:`)
+            .setTimestamp();
+
+        categoryCommands.forEach(command => {
+            const options = command.data.options || [];
+            let optionsText = '';
+            
+            if (options.length > 0) {
+                optionsText = '\n**Options:**\n' + options.map(opt => 
+                    `• \`${opt.name}\` ${opt.required ? '(required)' : '(optional)'} - ${opt.description}`
+                ).join('\n');
+            }
+
+            embed.addFields({
+                name: `/${command.data.name}`,
+                value: `${command.data.description}${optionsText}`,
+                inline: false
+            });
+        });
+
+        if (categoryCommands.length === 0) {
+            embed.setDescription(`No commands found in the ${selection} category.`);
+        }
+
+        // Add back button
+        const backMenu = new StringSelectMenuBuilder()
+            .setCustomId('help_category_dynamic')
+            .setPlaceholder('🔙 Go back to main help menu...')
+            .addOptions({
+                label: 'Back to Help Menu',
+                description: 'Return to the main help menu',
+                value: 'back_to_main',
+                emoji: '🔙'
+            });
+
+        const actionRow = new ActionRowBuilder().addComponents(backMenu);
+        
+        await interaction.update({ embeds: [embed], components: [actionRow] });
+    }
+}
+
+function getCategoryIcon(category) {
+    const icons = {
+        'moderation': '🔨',
+        'admin': '⚙️',
+        'support': '🎫',
+        'utility': '🔧',
+        'fun': '🎮',
+        'music': '🎵',
+        'economy': '💰',
+        'games': '🎯'
+    };
+    return icons[category.toLowerCase()] || '📁';
+}
+
+async function sendMainHelpForUpdate(interaction) {
+    const { EmbedBuilder, ActionRowBuilder, StringSelectMenuBuilder } = require('discord.js');
+    
+    const commands = interaction.client.commands;
+    
+    // Organize commands by category
+    const categories = {};
+    const categoryStats = {};
+    
+    commands.forEach(command => {
+        let category = 'utility';
+        const commandName = command.data.name;
+        const fs = require('fs');
+        const path = require('path');
+        
+        const categoriesPath = path.join(__dirname, '..', '..');
+        const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
+        
+        for (const folder of categoryFolders) {
+            const folderPath = path.join(categoriesPath, 'commands', folder);
+            if (fs.existsSync(folderPath)) {
+                const files = fs.readdirSync(folderPath);
+                if (files.some(file => file === `${commandName}.js`)) {
+                    category = folder;
+                    break;
+                }
+            }
+        }
+        
+        if (!categories[category]) {
+            categories[category] = [];
+            categoryStats[category] = 0;
+        }
+        
+        categories[category].push(command);
+        categoryStats[category]++;
+    });
+
+    // Create main help embed
+    const embed = new EmbedBuilder()
+        .setColor('#5865F2')
+        .setTitle('🤖 Bot Help Center')
+        .setDescription(
+            `Welcome to the help center! I have **${commands.size}** commands across **${Object.keys(categories).length}** categories.\n\n` +
+            `**Quick Stats:**\n` +
+            Object.entries(categoryStats).map(([cat, count]) => 
+                `• **${cat.charAt(0).toUpperCase() + cat.slice(1)}**: ${count} commands`
+            ).join('\n') +
+            `\n\n**Select a category below to view detailed command information:**`
+        )
+        .setThumbnail(interaction.client.user.displayAvatarURL({ dynamic: true }))
+        .setFooter({ 
+            text: `Use the dropdown below to explore commands • Requested by ${interaction.user.tag}`,
+            iconURL: interaction.user.displayAvatarURL({ dynamic: true })
+        })
+        .setTimestamp();
+
+    // Create dynamic dropdown menu
+    const selectMenu = new StringSelectMenuBuilder()
+        .setCustomId('help_category_dynamic')
+        .setPlaceholder('📂 Select a category to view commands...')
+        .setMinValues(1)
+        .setMaxValues(1);
+
+    // Add options for each category
+    Object.entries(categories).forEach(([categoryName, commandList]) => {
+        const categoryIcon = getCategoryIcon(categoryName);
+        const categoryDescription = getCategoryDescription(categoryName, commandList.length);
+        
+        selectMenu.addOptions({
+            label: `${categoryName.charAt(0).toUpperCase() + categoryName.slice(1)} Commands`,
+            description: categoryDescription,
+            value: categoryName,
+            emoji: categoryIcon
+        });
+    });
+
+    // Add overview option
+    selectMenu.addOptions({
+        label: 'Command Overview',
+        description: 'View all commands in a compact format',
+        value: 'overview',
+        emoji: '📋'
+    });
+
+    const actionRow = new ActionRowBuilder().addComponents(selectMenu);
+
+    await interaction.update({ 
+        embeds: [embed], 
+        components: [actionRow]
+    });
+}
+
+function getCategoryDescription(category, commandCount) {
+    const descriptions = {
+        'moderation': `${commandCount} commands for server moderation`,
+        'admin': `${commandCount} commands for server administration`,
+        'support': `${commandCount} commands for user support`,
+        'utility': `${commandCount} commands for general utilities`,
+        'fun': `${commandCount} commands for entertainment`,
+        'music': `${commandCount} commands for music playback`,
+        'economy': `${commandCount} commands for economy features`,
+        'games': `${commandCount} commands for games`
+    };
+    return descriptions[category.toLowerCase()] || `${commandCount} commands in this category`;
 }
