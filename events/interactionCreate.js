@@ -73,34 +73,13 @@ async function handleSelectMenu(interaction) {
         if (interaction.customId === 'help_category_select') {
             const category = interaction.values[0];
             
-            // Import the help command's category function
-            const helpCommand = interaction.client.commands.get('help');
-            if (helpCommand) {
-                // Create a mock interaction for the category help
-                const mockInteraction = {
-                    ...interaction,
-                    options: {
-                        getString: () => category
-                    }
-                };
-                
-                await helpCommand.execute(mockInteraction);
-            }
+            // Handle category help directly
+            await sendCategoryHelpForSelectMenu(interaction, category);
         } else if (interaction.customId === 'faq_select') {
             const topic = interaction.values[0];
             
-            // Import the FAQ command's specific function
-            const faqCommand = interaction.client.commands.get('faq');
-            if (faqCommand) {
-                const mockInteraction = {
-                    ...interaction,
-                    options: {
-                        getString: () => topic
-                    }
-                };
-                
-                await faqCommand.execute(mockInteraction);
-            }
+            // Handle FAQ selection directly
+            await sendFAQForSelectMenu(interaction, topic);
         }
     } catch (error) {
         logger.error('Error handling select menu interaction:', error);
@@ -113,6 +92,53 @@ async function handleSelectMenu(interaction) {
             await interaction.reply({ embeds: [errorEmbed], ephemeral: true }).catch(() => {});
         }
     }
+}
+
+async function sendCategoryHelpForSelectMenu(interaction, category) {
+    const config = require('../config');
+    let embed;
+
+    switch (category) {
+        case 'moderation':
+            embed = createEmbed('info', '🔨 Moderation Commands', 
+                `**Available Moderation Commands:**\n\n\`/ban <user> [reason] [delete_days]\`\n• Ban a user from the server\n• Optionally delete their recent messages\n• Requires: Ban Members permission\n\n\`/kick <user> [reason]\`\n• Kick a user from the server\n• Requires: Kick Members permission\n\n\`/mute <user> [duration] [reason]\`\n• Timeout a user (prevents them from sending messages)\n• Duration format: 1h, 30m, 1d (max 28 days)\n• Requires: Moderate Members permission\n\n\`/unmute <user> [reason]\`\n• Remove timeout from a user\n• Requires: Moderate Members permission\n\n\`/warn <user> <reason>\`\n• Issue a warning to a user\n• Auto-punishment after ${config.moderation.maxWarnings} warnings\n• Requires: Moderate Members permission\n\n**Features:**\n• All actions are logged to the mod log channel\n• Users receive DM notifications when possible\n• Role hierarchy is respected\n• Automatic punishments for repeated violations`);
+            break;
+
+        case 'support':
+            embed = createEmbed('info', '🎫 Support Commands', 
+                `**Available Support Commands:**\n\n\`/ticket [reason]\`\n• Create a new support ticket\n• Opens a private channel for you and support staff\n• Provide a reason to help staff understand your issue\n\n\`/close [reason]\`\n• Close your support ticket\n• Can only be used in ticket channels\n• Creates a transcript that's saved and sent to you\n• Can be used by ticket owner or staff\n\n**Ticket System Features:**\n• Private channels for each ticket\n• Automatic transcript generation\n• Support team notifications\n• Ticket logging and history\n• Only one open ticket per user\n\n**Getting Support:**\n1. Use \`/ticket\` to create a ticket\n2. Describe your issue in the ticket channel\n3. Wait for support team response\n4. Use \`/close\` when your issue is resolved`);
+            break;
+
+        case 'utility':
+            embed = createEmbed('info', '🔧 Utility Commands', 
+                `**Available Utility Commands:**\n\n\`/help [category]\`\n• Show this help message\n• Optionally specify a category for detailed info\n\n\`/faq [topic]\`\n• View frequently asked questions\n• Shows all FAQs or specific topic\n• Topics: ${Object.keys(config.faq).map(key => `\`${key}\``).join(', ')}\n\n**General Features:**\n• User-friendly error messages\n• Comprehensive help system\n• FAQ system for common questions\n• Slash command interface\n\n**Bot Information:**\n• Built with Discord.js v14\n• Modular command system\n• Comprehensive logging\n• Multi-server support`);
+            break;
+
+        case 'admin':
+            embed = createEmbed('info', '⚙️ Admin Commands', 
+                `**Available Admin Commands:**\n\n\`/autorole <action> [role]\`\n• Configure automatic role assignment\n• Actions: \`add\`, \`remove\`, \`list\`\n• Automatically assigns roles to new members\n• Requires: Manage Roles permission\n\n\`/welcome <action> [channel] [message]\`\n• Configure welcome message system\n• Actions: \`set\`, \`disable\`, \`test\`\n• Customize welcome messages for new members\n• Use \`{user}\` placeholder for mentions\n• Requires: Manage Guild permission\n\n**Configuration Features:**\n• Persistent settings stored in database\n• Per-server configuration\n• Real-time updates\n• Easy setup and management\n\n**Required Permissions:**\n• Bot needs appropriate permissions for each feature\n• Admin commands require elevated permissions\n• Settings are saved automatically`);
+            break;
+
+        default:
+            embed = createEmbed('error', 'Error', 'Invalid category specified.');
+            break;
+    }
+
+    await interaction.update({ embeds: [embed], components: [], ephemeral: true });
+}
+
+async function sendFAQForSelectMenu(interaction, topic) {
+    const config = require('../config');
+    const faqEntry = config.faq[topic];
+    
+    if (!faqEntry) {
+        const embed = createEmbed('error', 'Error', 'FAQ topic not found.');
+        await interaction.update({ embeds: [embed], components: [], ephemeral: true });
+        return;
+    }
+
+    const embed = createEmbed('info', '❓ ' + faqEntry.question, faqEntry.answer);
+    await interaction.update({ embeds: [embed], components: [], ephemeral: true });
 }
 
 async function handleButton(interaction) {
