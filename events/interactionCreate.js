@@ -2,6 +2,8 @@ const { createEmbed } = require('../utils/embed');
 const { checkPermissions } = require('../utils/permissions');
 const config = require('../config');
 const logger = require('../utils/logger');
+const path = require('path');
+const fs = require('fs');
 
 module.exports = {
     name: 'interactionCreate',
@@ -110,7 +112,7 @@ async function sendCategoryHelpForSelectMenu(interaction, category) {
 
         case 'utility':
             embed = createEmbed('info', '🔧 Utility Commands', 
-                `**Available Utility Commands:**\n\n\`/help [category]\`\n• Show this help message\n• Optionally specify a category for detailed info\n\n\`/faq [topic]\`\n• View frequently asked questions\n• Shows all FAQs or specific topic\n• Topics: ${Object.keys(config.faq).map(key => `\`${key}\``).join(', ')}\n\n**General Features:**\n• User-friendly error messages\n• Comprehensive help system\n• FAQ system for common questions\n• Slash command interface\n\n**Bot Information:**\n• Built with Discord.js v14\n• Modular command system\n• Comprehensive logging\n• Multi-server support`);
+                `**Available Utility Commands:**\n\n\`/help [category]\`\n• Show this help message\n• Optionally specify a category for detailed info\n\n\`/faq [topic]\`\n• View frequently asked questions\n• Shows all FAQs or specific topic\n• Topics: ${Object.keys(config.faq).map(key => \`\`${key}\`\`).join(', ')}\n\n**General Features:**\n• User-friendly error messages\n• Comprehensive help system\n• FAQ system for common questions\n• Slash command interface\n\n**Bot Information:**\n• Built with Discord.js v14\n• Modular command system\n• Comprehensive logging\n• Multi-server support`);
             break;
 
         case 'admin':
@@ -385,24 +387,7 @@ async function handleDynamicHelpSelection(interaction, selection) {
         const categories = {};
         
         commands.forEach(command => {
-            let category = 'utility';
-            const commandName = command.data.name;
-            const fs = require('fs');
-            const path = require('path');
-            
-            const categoriesPath = path.join(__dirname, '..', '..');
-            const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
-            
-            for (const folder of categoryFolders) {
-                const folderPath = path.join(categoriesPath, 'commands', folder);
-                if (fs.existsSync(folderPath)) {
-                    const files = fs.readdirSync(folderPath);
-                    if (files.some(file => file === `${commandName}.js`)) {
-                        category = folder;
-                        break;
-                    }
-                }
-            }
+            let category = determineCommandCategory(command.data.name);
             
             if (!categories[category]) {
                 categories[category] = [];
@@ -427,31 +412,27 @@ async function handleDynamicHelpSelection(interaction, selection) {
             });
         });
 
-        await interaction.update({ embeds: [embed], components: [] });
+        // Add back button
+        const backMenu = new StringSelectMenuBuilder()
+            .setCustomId('help_category_dynamic')
+            .setPlaceholder('🔙 Go back to main help menu...')
+            .addOptions({
+                label: 'Back to Help Menu',
+                description: 'Return to the main help menu',
+                value: 'back_to_main',
+                emoji: '🔙'
+            });
+
+        const actionRow = new ActionRowBuilder().addComponents(backMenu);
+        
+        await interaction.update({ embeds: [embed], components: [actionRow] });
         
     } else {
         // Show specific category
         const categoryCommands = [];
         
         commands.forEach(command => {
-            let category = 'utility';
-            const commandName = command.data.name;
-            const fs = require('fs');
-            const path = require('path');
-            
-            const categoriesPath = path.join(__dirname, '..', '..');
-            const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
-            
-            for (const folder of categoryFolders) {
-                const folderPath = path.join(categoriesPath, 'commands', folder);
-                if (fs.existsSync(folderPath)) {
-                    const files = fs.readdirSync(folderPath);
-                    if (files.some(file => file === `${commandName}.js`)) {
-                        category = folder;
-                        break;
-                    }
-                }
-            }
+            const category = determineCommandCategory(command.data.name);
             
             if (category === selection) {
                 categoryCommands.push(command);
@@ -465,25 +446,35 @@ async function handleDynamicHelpSelection(interaction, selection) {
             .setDescription(`Detailed information about ${selection} commands:`)
             .setTimestamp();
 
-        categoryCommands.forEach(command => {
-            const options = command.data.options || [];
-            let optionsText = '';
-            
-            if (options.length > 0) {
-                optionsText = '\n**Options:**\n' + options.map(opt => 
-                    `• \`${opt.name}\` ${opt.required ? '(required)' : '(optional)'} - ${opt.description}`
-                ).join('\n');
-            }
-
-            embed.addFields({
-                name: `/${command.data.name}`,
-                value: `${command.data.description}${optionsText}`,
-                inline: false
-            });
-        });
-
         if (categoryCommands.length === 0) {
             embed.setDescription(`No commands found in the ${selection} category.`);
+        } else {
+            categoryCommands.forEach((command, index) => {
+                const options = command.data.options || [];
+                let optionsText = '';
+                
+                if (options.length > 0) {
+                    optionsText = '\n**Options:**\n' + options.map(opt => 
+                        `• \`${opt.name}\` ${opt.required ? '(required)' : '(optional)'} - ${opt.description}`
+                    ).join('\n');
+                }
+
+                // Discord embeds have a limit of 25 fields
+                if (index < 25) {
+                    embed.addFields({
+                        name: `/${command.data.name}`,
+                        value: `${command.data.description}${optionsText}`,
+                        inline: false
+                    });
+                }
+            });
+            
+            // If there are more than 25 commands, add a note
+            if (categoryCommands.length > 25) {
+                embed.setFooter({ 
+                    text: `Showing first 25 of ${categoryCommands.length} commands in this category` 
+                });
+            }
         }
 
         // Add back button
@@ -500,6 +491,32 @@ async function handleDynamicHelpSelection(interaction, selection) {
         const actionRow = new ActionRowBuilder().addComponents(backMenu);
         
         await interaction.update({ embeds: [embed], components: [actionRow] });
+    }
+}
+
+function determineCommandCategory(commandName) {
+    try {
+        // Define the path to commands directory
+        const commandsPath = path.join(__dirname, '..', '..');
+        const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
+        
+        for (const folder of categoryFolders) {
+            const folderPath = path.join(commandsPath, 'commands', folder);
+            
+            // Check if the folder exists and contains the command file
+            if (fs.existsSync(folderPath)) {
+                const files = fs.readdirSync(folderPath);
+                if (files.some(file => file === `${commandName}.js`)) {
+                    return folder;
+                }
+            }
+        }
+        
+        // Default fallback
+        return 'utility';
+    } catch (error) {
+        console.warn(`Could not determine category for command ${commandName}:`, error);
+        return 'utility';
     }
 }
 
@@ -527,24 +544,7 @@ async function sendMainHelpForUpdate(interaction) {
     const categoryStats = {};
     
     commands.forEach(command => {
-        let category = 'utility';
-        const commandName = command.data.name;
-        const fs = require('fs');
-        const path = require('path');
-        
-        const categoriesPath = path.join(__dirname, '..', '..');
-        const categoryFolders = ['moderation', 'admin', 'support', 'utility'];
-        
-        for (const folder of categoryFolders) {
-            const folderPath = path.join(categoriesPath, 'commands', folder);
-            if (fs.existsSync(folderPath)) {
-                const files = fs.readdirSync(folderPath);
-                if (files.some(file => file === `${commandName}.js`)) {
-                    category = folder;
-                    break;
-                }
-            }
-        }
+        const category = determineCommandCategory(command.data.name);
         
         if (!categories[category]) {
             categories[category] = [];
@@ -622,4 +622,4 @@ function getCategoryDescription(category, commandCount) {
         'games': `${commandCount} commands for games`
     };
     return descriptions[category.toLowerCase()] || `${commandCount} commands in this category`;
-}
+                                                                  }
