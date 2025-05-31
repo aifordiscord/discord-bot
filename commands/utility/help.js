@@ -67,7 +67,7 @@ async function sendMainHelp(interaction) {
     await interaction.reply({
         embeds: [embed],
         components: [row],
-        ephemeral: true
+        flags: 64 // MessageFlags.Ephemeral
     });
 }
 
@@ -100,5 +100,5 @@ async function sendCategoryHelp(interaction, category) {
             break;
     }
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.reply({ embeds: [embed], flags: 64 });
 }
