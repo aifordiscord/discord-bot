@@ -1,5 +1,5 @@
 
-const { MongoClient } = require('mongodb');
+const { MongoClient } = require('mongoose');
 const config = require('./config');
 const logger = require('./utils/logger');
 
