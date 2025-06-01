@@ -8,7 +8,8 @@ module.exports = {
     
     // Database settings
     database: {
-        path: process.env.DB_PATH || './bot.db'
+        uri: process.env.MONGODB_URI || 'mongodb://localhost:27017',
+        name: process.env.DB_NAME || 'discord_bot'
     },
     
     // Bot settings

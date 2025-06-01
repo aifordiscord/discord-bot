@@ -1,7 +1,7 @@
 const { Client, GatewayIntentBits, Collection, REST, Routes } = require('discord.js');
 const express = require('express');
 const config = require('./config');
-const { initializeDatabase } = require('./database');
+const { initializeDatabase, closeDatabase } = require('./database');
 const { loadCommands } = require('./handlers/commandHandler');
 const { loadEvents } = require('./handlers/eventHandler');
 const logger = require('./utils/logger');
@@ -104,15 +104,17 @@ process.on('uncaughtException', (error) => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+process.on('SIGINT', async () => {
     logger.info('Received SIGINT, shutting down gracefully...');
     client.destroy();
+    await closeDatabase();
     process.exit(0);
 });
 
-process.on('SIGTERM', () => {
+process.on('SIGTERM', async () => {
     logger.info('Received SIGTERM, shutting down gracefully...');
     client.destroy();
+    await closeDatabase();
     process.exit(0);
 });
 

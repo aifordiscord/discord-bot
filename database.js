@@ -1,23 +1,24 @@
-const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
+
+const { MongoClient } = require('mongodb');
 const config = require('./config');
 const logger = require('./utils/logger');
 
 let db;
+let client;
 
 /**
- * Initialize SQLite database and create tables
+ * Initialize MongoDB database and create collections
  */
 async function initializeDatabase() {
     try {
-        db = await open({
-            filename: config.database.path,
-            driver: sqlite3.Database
-        });
-
-        // Create tables
-        await createTables();
-        logger.info('Database connection established and tables created');
+        client = new MongoClient(config.database.uri);
+        await client.connect();
+        
+        db = client.db(config.database.name);
+        
+        // Create indexes for better performance
+        await createIndexes();
+        logger.info('MongoDB connection established and indexes created');
         
         return db;
     } catch (error) {
@@ -27,76 +28,31 @@ async function initializeDatabase() {
 }
 
 /**
- * Create necessary database tables
+ * Create necessary database indexes
  */
-async function createTables() {
-    // Tickets table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS tickets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id TEXT NOT NULL,
-            channel_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            status TEXT DEFAULT 'open',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            closed_at DATETIME,
-            closed_by TEXT,
-            reason TEXT
-        )
-    `);
+async function createIndexes() {
+    try {
+        // Tickets collection indexes
+        await db.collection('tickets').createIndex({ guild_id: 1, channel_id: 1 });
+        await db.collection('tickets').createIndex({ guild_id: 1, user_id: 1 });
+        await db.collection('tickets').createIndex({ status: 1 });
 
-    // Guild settings table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS guild_settings (
-            guild_id TEXT PRIMARY KEY,
-            welcome_channel TEXT,
-            welcome_message TEXT,
-            autorole_id TEXT,
-            mod_log_channel TEXT,
-            ticket_category TEXT,
-            ticket_log_channel TEXT,
-            mute_role TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+        // Guild settings collection indexes
+        await db.collection('guild_settings').createIndex({ guild_id: 1 }, { unique: true });
 
-    // Warnings table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS warnings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            moderator_id TEXT NOT NULL,
-            reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            active INTEGER DEFAULT 1
-        )
-    `);
+        // Warnings collection indexes
+        await db.collection('warnings').createIndex({ guild_id: 1, user_id: 1 });
+        await db.collection('warnings').createIndex({ active: 1 });
 
-    // Moderation logs table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS mod_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id TEXT NOT NULL,
-            user_id TEXT NOT NULL,
-            moderator_id TEXT NOT NULL,
-            action TEXT NOT NULL,
-            reason TEXT,
-            duration INTEGER,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+        // Moderation logs collection indexes
+        await db.collection('mod_logs').createIndex({ guild_id: 1, user_id: 1 });
+        await db.collection('mod_logs').createIndex({ created_at: 1 });
 
-    // Auto-role settings table
-    await db.exec(`
-        CREATE TABLE IF NOT EXISTS autoroles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            guild_id TEXT NOT NULL,
-            role_id TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
+        // Auto-roles collection indexes
+        await db.collection('autoroles').createIndex({ guild_id: 1, role_id: 1 }, { unique: true });
+    } catch (error) {
+        logger.error('Error creating indexes:', error);
+    }
 }
 
 /**
@@ -113,123 +69,163 @@ function getDatabase() {
  * Guild settings functions
  */
 async function getGuildSettings(guildId) {
-    const settings = await db.get(
-        'SELECT * FROM guild_settings WHERE guild_id = ?',
-        [guildId]
-    );
+    const settings = await db.collection('guild_settings').findOne({ guild_id: guildId });
     return settings || null;
 }
 
 async function updateGuildSettings(guildId, settings) {
-    const existing = await getGuildSettings(guildId);
-    
-    if (existing) {
-        const updateQuery = `
-            UPDATE guild_settings 
-            SET ${Object.keys(settings).map(key => `${key} = ?`).join(', ')}, 
-                updated_at = CURRENT_TIMESTAMP
-            WHERE guild_id = ?
-        `;
-        await db.run(updateQuery, [...Object.values(settings), guildId]);
-    } else {
-        const insertQuery = `
-            INSERT INTO guild_settings (guild_id, ${Object.keys(settings).join(', ')})
-            VALUES (?, ${Object.keys(settings).map(() => '?').join(', ')})
-        `;
-        await db.run(insertQuery, [guildId, ...Object.values(settings)]);
-    }
+    const updateDoc = {
+        ...settings,
+        updated_at: new Date()
+    };
+
+    await db.collection('guild_settings').updateOne(
+        { guild_id: guildId },
+        { 
+            $set: updateDoc,
+            $setOnInsert: { 
+                guild_id: guildId,
+                created_at: new Date()
+            }
+        },
+        { upsert: true }
+    );
 }
 
 /**
  * Ticket functions
  */
 async function createTicket(guildId, channelId, userId, reason = null) {
-    const result = await db.run(
-        'INSERT INTO tickets (guild_id, channel_id, user_id, reason) VALUES (?, ?, ?, ?)',
-        [guildId, channelId, userId, reason]
-    );
-    return result.lastID;
+    const ticket = {
+        guild_id: guildId,
+        channel_id: channelId,
+        user_id: userId,
+        status: 'open',
+        created_at: new Date(),
+        reason: reason
+    };
+
+    const result = await db.collection('tickets').insertOne(ticket);
+    return result.insertedId;
 }
 
 async function getTicket(channelId) {
-    return await db.get(
-        'SELECT * FROM tickets WHERE channel_id = ? AND status = "open"',
-        [channelId]
-    );
+    return await db.collection('tickets').findOne({
+        channel_id: channelId,
+        status: 'open'
+    });
 }
 
 async function closeTicket(channelId, closedBy, reason = null) {
-    await db.run(
-        'UPDATE tickets SET status = "closed", closed_at = CURRENT_TIMESTAMP, closed_by = ?, reason = ? WHERE channel_id = ?',
-        [closedBy, reason, channelId]
+    await db.collection('tickets').updateOne(
+        { channel_id: channelId },
+        {
+            $set: {
+                status: 'closed',
+                closed_at: new Date(),
+                closed_by: closedBy,
+                reason: reason
+            }
+        }
     );
 }
 
 async function getUserTickets(guildId, userId) {
-    return await db.all(
-        'SELECT * FROM tickets WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC',
-        [guildId, userId]
-    );
+    return await db.collection('tickets')
+        .find({ guild_id: guildId, user_id: userId })
+        .sort({ created_at: -1 })
+        .toArray();
 }
 
 /**
  * Warning functions
  */
 async function addWarning(guildId, userId, moderatorId, reason) {
-    const result = await db.run(
-        'INSERT INTO warnings (guild_id, user_id, moderator_id, reason) VALUES (?, ?, ?, ?)',
-        [guildId, userId, moderatorId, reason]
-    );
-    return result.lastID;
+    const warning = {
+        guild_id: guildId,
+        user_id: userId,
+        moderator_id: moderatorId,
+        reason: reason,
+        created_at: new Date(),
+        active: true
+    };
+
+    const result = await db.collection('warnings').insertOne(warning);
+    return result.insertedId;
 }
 
 async function getUserWarnings(guildId, userId) {
-    return await db.all(
-        'SELECT * FROM warnings WHERE guild_id = ? AND user_id = ? AND active = 1 ORDER BY created_at DESC',
-        [guildId, userId]
-    );
+    return await db.collection('warnings')
+        .find({ guild_id: guildId, user_id: userId, active: true })
+        .sort({ created_at: -1 })
+        .toArray();
 }
 
 async function getWarningCount(guildId, userId) {
-    const result = await db.get(
-        'SELECT COUNT(*) as count FROM warnings WHERE guild_id = ? AND user_id = ? AND active = 1',
-        [guildId, userId]
-    );
-    return result.count;
+    return await db.collection('warnings').countDocuments({
+        guild_id: guildId,
+        user_id: userId,
+        active: true
+    });
 }
 
 /**
  * Moderation log functions
  */
 async function addModLog(guildId, userId, moderatorId, action, reason, duration = null) {
-    await db.run(
-        'INSERT INTO mod_logs (guild_id, user_id, moderator_id, action, reason, duration) VALUES (?, ?, ?, ?, ?, ?)',
-        [guildId, userId, moderatorId, action, reason, duration]
-    );
+    const modLog = {
+        guild_id: guildId,
+        user_id: userId,
+        moderator_id: moderatorId,
+        action: action,
+        reason: reason,
+        duration: duration,
+        created_at: new Date()
+    };
+
+    await db.collection('mod_logs').insertOne(modLog);
 }
 
 /**
  * Auto-role functions
  */
 async function getAutoRoles(guildId) {
-    return await db.all(
-        'SELECT role_id FROM autoroles WHERE guild_id = ?',
-        [guildId]
-    );
+    const autoRoles = await db.collection('autoroles')
+        .find({ guild_id: guildId })
+        .toArray();
+    
+    return autoRoles.map(role => ({ role_id: role.role_id }));
 }
 
 async function addAutoRole(guildId, roleId) {
-    await db.run(
-        'INSERT OR IGNORE INTO autoroles (guild_id, role_id) VALUES (?, ?)',
-        [guildId, roleId]
+    await db.collection('autoroles').updateOne(
+        { guild_id: guildId, role_id: roleId },
+        { 
+            $setOnInsert: { 
+                guild_id: guildId,
+                role_id: roleId,
+                created_at: new Date()
+            }
+        },
+        { upsert: true }
     );
 }
 
 async function removeAutoRole(guildId, roleId) {
-    await db.run(
-        'DELETE FROM autoroles WHERE guild_id = ? AND role_id = ?',
-        [guildId, roleId]
-    );
+    await db.collection('autoroles').deleteOne({
+        guild_id: guildId,
+        role_id: roleId
+    });
+}
+
+/**
+ * Close database connection
+ */
+async function closeDatabase() {
+    if (client) {
+        await client.close();
+        logger.info('MongoDB connection closed');
+    }
 }
 
 module.exports = {
@@ -247,5 +243,6 @@ module.exports = {
     addModLog,
     getAutoRoles,
     addAutoRole,
-    removeAutoRole
+    removeAutoRole,
+    closeDatabase
 };
